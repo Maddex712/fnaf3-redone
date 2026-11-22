@@ -1,0 +1,56 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.winlator'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'dev.thor.fn3'
+        minSdkVersion 26
+        targetSdkVersion 28
+        versionCode 43
+        versionName providers.gradleProperty('thorVersionName').getOrElse('1.1.0-thor')
+        resValue 'string', 'thor_update_feed', providers.gradleProperty('thorUpdateFeed').getOrElse('')
+    }
+
+    buildTypes {
+        debug {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+
+            ndk {
+                abiFilters 'arm64-v8a'
+            }
+        }
+        privatePreview {
+            initWith debug
+            debuggable false
+            minifyEnabled false
+            matchingFallbacks = ['debug']
+        }
+    }
+
+    lintOptions {
+        checkReleaseBuilds false
+    }
+
+    ndkVersion '24.0.8215888'
+
+    externalNativeBuild {
+        cmake {
+            version '3.22.1'
+            path 'src/main/cpp/CMakeLists.txt'
+        }
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    implementation 'androidx.appcompat:appcompat:1.4.0'
+    implementation 'androidx.preference:preference:1.2.1'
+    implementation 'com.google.android.material:material:1.4.0'
+    implementation 'com.github.luben:zstd-jni:1.5.2-3@aar'
+    implementation 'org.tukaani:xz:1.12'
+    implementation 'org.apache.commons:commons-compress:1.28.0'
+    implementation 'androidx.lifecycle:lifecycle-process:2.5.1'
+}

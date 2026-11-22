@@ -1,0 +1,21 @@
+FNaF 3 Redone for AYN Thor is an unofficial launcher and companion for the Steam release of Five Nights at Freddy's 3 (build 1892839). It contains no game files. The player imports their own FiveNightsatFreddys3.exe, which runs unmodified through the bundled compatibility runtime.
+
+This app is based on Winlator and is distributed under the GNU Lesser General Public License, version 2.1. The full licence text follows on the next page. The source code for this app, including all changes, is published alongside each release.
+
+Bundled runtime components (each under its own licence):
+  Wine 10.10 (in rootfs)           LGPL 2.1 or later
+  Box64 0.4.4                      MIT
+  Mesa Turnip 26.2.0, VirGL 23.1.9,
+  Zink 22.2.5                      MIT
+  DXVK 1.10.3 and 2.4.1            zlib
+  D8VK 1.0, D7VK 1.11              DXVK-based, see upstream
+  VKD3D-Proton 2.14.1              LGPL 2.1
+  cnc-ddraw 6.6                    MIT
+  PulseAudio (in pulseaudio.tzst)  LGPL 2.1 or later
+  Gladio 1.1, Vortek 2.1           part of Winlator, LGPL 2.1
+                                   (gladio includes stb_dxt, MIT)
+  AndroidX, Apache Commons Compress Apache 2.0
+  zstd-jni                         BSD
+  XZ for Java                      public domain
+
+Five Nights at Freddy's is the property of its owner. This project is not affiliated with or endorsed by them.
