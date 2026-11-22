@@ -25,7 +25,31 @@ Updating from 1.0 keeps your saves, points and unlocks.
 - **Dual screen.** The office sits above and the cameras below by default. Settings can swap the screens or use a single screen.
 - **Arcade practice.** All six minigames, each on its own save, with guides hidden until you open them.
 
-![Shift Manager options](docs/images/shift-manager-options.png)
+## Screenshots
+
+The lower screen between nights, in the Fazbear Shift Manager:
+
+| Arcade practice | Personnel record |
+|---|---|
+| ![Arcade practice list with six minigames and their nights](docs/images/arcade-practice.png) | ![Achievements with earned checks and progress](docs/images/personnel-record.png) |
+
+| Desk shop | Options |
+|---|---|
+| ![Desk shop showing the pocket moth on the desk](docs/images/desk-shop.png) | ![Options for display, screen order, picture and controller](docs/images/shift-manager-options.png) |
+
+Arcade practice runs each minigame on its own save. The guide stays hidden until you press Y, and hold-to-move keys appear on the lower screen while a minigame plays:
+
+| Practice session | Minigame controls |
+|---|---|
+| ![Arcade practice page for BB's Air Adventure](docs/images/arcade-practice-session.png) | ![Four large arrow keys for minigame movement](docs/images/arcade-controls.png) |
+
+START pauses any night:
+
+![Pause menu with Exit game, Keep playing and Quit to title](docs/images/pause-menu.png)
+
+The licence page under Settings lists every bundled runtime component:
+
+![Open-source licenses page](docs/images/licenses.png)
 
 ## Controls
 
