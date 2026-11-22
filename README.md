@@ -11,20 +11,21 @@ An unofficial Android launcher and dual-screen companion for the Steam release o
 
 ## Install
 
-1. Download `FNaF3-Redone-Thor-1.1.0.apk` from [Releases](../../releases) and install it.
+1. Download `FNaF3-Redone-Thor-1.1.1.apk` from [Releases](../../releases) and install it.
 2. Copy `FiveNightsatFreddys3.exe` from your Steam install to the device.
 3. Open the app, choose **Import Steam file**, and select the executable. It is verified and copied into the app.
 4. Choose **Play**. The first launch unpacks the runtime once, behind the title.
 
 ![First-launch setup screen asking for the Steam executable](docs/images/setup.png)
 
-Updating from 1.0 keeps your saves, points and unlocks.
+Updating from 1.1.0 or 1.0 keeps your saves, points and unlocks.
 
 ## How it plays
 
 - **One title.** Like FNaF 1 and 2 Redone, the app opens straight onto the title: New Game, the saved night, Arcade, Achievements, Desk Shop, Settings and Exit. Choosing a night starts it directly.
 - **Lower screen.** The Fazbear Shift Manager between nights shows shifts, records, arcade practice and the desk shop. During a night the Security Desk takes over, with Cameras and Maintenance as large controls. Both use interface art read from your imported executable at runtime.
-- **Dual screen.** The office sits above and the cameras below by default. Settings can swap the screens or use a single screen.
+- **Dual screen.** The office sits above and the cameras below by default. Opening the cameras or maintenance turns the office toward them on the top screen, and the panel drops onto the lower screen. Settings can swap the screens or use a single screen.
+- **60 fps.** The game draws through DXVK (Direct3D 9 to Vulkan) and runs at 60 fps on the Thor. Settings, Renderer switches back to WineD3D, which runs at about 30.
 - **Arcade practice.** All six minigames, each on its own save, with guides hidden until you open them.
 
 ## Screenshots
@@ -35,9 +36,9 @@ The lower screen between nights, in the Fazbear Shift Manager:
 |---|---|
 | ![Arcade practice list with six minigames and their nights](docs/images/arcade-practice.png) | ![Achievements with earned checks and progress](docs/images/personnel-record.png) |
 
-| Desk shop | Options |
+| Desk shop | Settings |
 |---|---|
-| ![Desk shop showing the pocket moth on the desk](docs/images/desk-shop.png) | ![Options for display, screen order, picture and controller](docs/images/shift-manager-options.png) |
+| ![Desk shop showing the pocket moth on the desk](docs/images/desk-shop.png) | ![Settings for display, screen order, picture, renderer and controller](docs/images/shift-manager-options.png) |
 
 Arcade practice runs each minigame on its own save. The guide stays hidden until you press Y, and hold-to-move keys appear on the lower screen while a minigame plays:
 
@@ -77,6 +78,8 @@ All bindings can be changed under Settings, Controller mappings.
 ```
 
 The `privatePreview` build type is non-debuggable and signed with the local debug key. Updates must be signed with the same key as the installed copy.
+
+The display bridge, the `d3d9.dll` the app installs next to the game, is built from [display-bridge](display-bridge).
 
 ## Licence
 

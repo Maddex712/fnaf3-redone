@@ -429,6 +429,11 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
     }
 
     /** Ends the game session; the boot activity then exits, restarts, opens Arcade practice or setup. */
+    /** True while the pause or exit sheet is open. */
+    boolean thorPaused() {
+        return thorMenuOpen;
+    }
+
     void thorEnd(ThorSession.Next next, ThorArcade stage) {
         if (thorClosing.get()) return;
         if (next == ThorSession.Next.ARCADE) ThorSession.requestArcade(stage);
@@ -449,7 +454,8 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
                         .setNegativeButton("Stay", null)
                         .setPositiveButton("Exit", (dialog, button) -> thorEnd(ThorSession.Next.EXIT, null));
             } else {
-                sheet.setTitle("Paused").setMeta("FNaF 3 Redone")
+                // Keep playing is the default, so a stray A press never throws the night away.
+                sheet.setTitle("Paused").setMeta("FNaF 3 Redone").safeDefault()
                         .setMessage("Quitting ends this night. The original game keeps its last saved night.")
                         .setNegativeButton("Keep playing", null)
                         .setNeutralButton("Exit game", (dialog, button) -> thorEnd(ThorSession.Next.EXIT, null))
@@ -634,7 +640,10 @@ public class XServerDisplayActivity extends AppCompatActivity implements Navigat
             guestProgramLauncherComponent.setGuestExecutable(guestExecutable);
 
             envVars.putAll(container.getEnvVars());
-            if (getIntent().getBooleanExtra("thor_display_bridge", false)) envVars.put("WINEDLLOVERRIDES", "d3d9=n,b");
+            if (getIntent().getBooleanExtra("thor_display_bridge", false)) {
+                envVars.put("WINEDLLOVERRIDES", "d3d9=n,b");
+                envVars.put("DXVK_LOG_LEVEL", "none");
+            }
             if (shortcut != null) envVars.putAll(shortcut.getExtra("envVars"));
             if (!envVars.has("WINEESYNC")) envVars.put("WINEESYNC", "1");
 

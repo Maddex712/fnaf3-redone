@@ -46,6 +46,9 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
     private enum Phase { WAIT_NIGHT, WAIT_CAMERA, SELECT_ROOM, TRIGGER, PLAYING, DONE, FAILED }
     private enum Opening { NONE, MONITOR, MAINTENANCE }
     private static final long MAX_FRAME_AGE_MS = 700;
+    // The office HUD can drop out for a few frames when the light flickers or the alarm flashes;
+    // the desk only leaves the office once it has been gone this long.
+    private static final long OFFICE_GRACE_MS = 1200;
     private static final long PANEL_OPEN_TIMEOUT_MS = 8000;
 
     static {
@@ -82,6 +85,38 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
     private boolean maintenanceVisible;
     private boolean buttonDown;
     private long lastSceneAt;
+    private long officeSeenAt;
+    private boolean officeFrame;
+    // The game sometimes stops drawing for a few seconds (loading the call at the start of a night).
+    private boolean gameBusy;
+    private boolean gamePaused;
+    private static final long BUSY_WINDOW_MS = 15000;
+    private static final long PANEL_HOLD_MS = 5000;
+    // In a ventilation blackout the open panel can be too dark to recognise for a moment; the lower
+    // screen keeps it up through such a gap unless a close was asked for.
+    private static final long PANEL_GRACE_MS = 900;
+    private static final long PARK_DELAY_MS = 160;
+    private static final long CLOSE_FREEZE_MS = 1200;
+    private static final long CAMERA_REVEAL_MS = 300;
+    private long firstCameraAt;
+
+    /** True when the camera area of the newest frame is close to black (the end of the flip). */
+    private boolean cameraFeedDark() {
+        int[] pixels = scene.pixels;
+        if (pixels == null) return false;
+        long total = 0;
+        int count = 0;
+        for (int y = CAMERA_CROP.top + 8; y < CAMERA_CROP.bottom - 8; y += 6) {
+            for (int x = CAMERA_CROP.left + 8; x < CAMERA_CROP.right - 8; x += 6) {
+                int pixel = pixels[y * scene.width + x];
+                total += Math.max((pixel >> 16) & 255, Math.max((pixel >> 8) & 255, pixel & 255));
+                ++count;
+            }
+        }
+        return count > 0 && total < 12L * count;
+    }
+    private long panelSeenAt;
+    private long closeRequestedAt;
     private long lastPairAt;
     private int acceptedPanel;
     private final File consumerFlag;
@@ -113,6 +148,20 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
     private long nextTitleClick;
     private int titleClicks;
     private int maintenanceRow;
+    // While a panel opens or has just closed, the office stays on the upper screen so the
+    // original flip animation never plays there; the monitor appears to travel to the other screen.
+    private long coverUntil;
+    private static final long CLOSE_COVER_MS = 650;
+    // The office layer is only written while a panel is up, so opening is covered by a copy of the
+    // whole picture taken when the panel was requested. The game reports maintenance as visible while
+    // its flip is still playing, so the copy stays a moment after the panel opens too.
+    private Bitmap cover;
+    private long coverTakenAt;
+    private long openCoverUntil;
+    private static final long OPEN_HOLD_MS = 1500;
+    private static final long OPEN_COVER_MS = 500;
+    private static final long SLIDE_IN_MS = 260;
+    private static final long SLIDE_OUT_MS = 220;
 
     ThorDualScreen(XServerDisplayActivity activity, FrameLayout root, XServer xServer, File sourceDir) {
         this.activity = activity;
@@ -256,6 +305,7 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
             boolean sceneUpdated = scene.read();
             boolean officeUpdated = office.read();
             if (sceneUpdated) lastSceneAt = now;
+            frameStats(now, sceneUpdated, officeUpdated);
             boolean frameFresh = lastSceneAt != 0 && now - lastSceneAt <= MAX_FRAME_AGE_MS;
             int flags = scene.metadata[2];
             boolean currentCamera = frameFresh && (flags & CAMERA_VISIBLE) != 0;
@@ -265,7 +315,18 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
                 acceptedPanel = 0;
                 lastPairAt = 0;
             }
-            boolean newOffice = frameFresh && (flags & IN_OFFICE) != 0;
+            boolean officeNow = frameFresh && (flags & IN_OFFICE) != 0;
+            officeFrame = officeNow;
+            if (officeNow) officeSeenAt = now;
+            boolean newOffice = officeNow || inOffice && frameFresh && now - officeSeenAt < OFFICE_GRACE_MS;
+            boolean paused = activity.thorPaused() && !titleShown();
+            boolean busy = !paused && !frameFresh && lastSceneAt != 0 && officeSeenAt != 0
+                    && now - officeSeenAt < BUSY_WINDOW_MS && !titleShown();
+            if (busy != gameBusy || paused != gamePaused) {
+                gameBusy = busy;
+                gamePaused = paused;
+                updateControls();
+            }
             if (newOffice != inOffice) {
                 inOffice = newOffice;
                 if (inOffice) {
@@ -284,30 +345,64 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
             if (completePair && (sceneUpdated || officeUpdated)) {
                 acceptedPanel = currentPanel;
                 lastPairAt = now;
-                scene.upload();
+                // After a close is asked for, the game plays its lowering animation; the lower screen keeps
+                // the last camera picture while it slides away instead of showing those dark frames.
+                if (!(panelVisible() && now - closeRequestedAt < CLOSE_FREEZE_MS)) scene.upload();
                 if (currentCamera && !arcade) {
                     boolean vent = ventMap();
                     int selected = selectedCamera(vent ? VENTS : ROOMS);
                     if (progress.recordCamera(vent, selected)) refreshProgress();
                     gallery.update(scene.bitmap, CAMERA_CROP, selected < 0 ? -1 : selected + (vent ? 11 : 1), now);
                 }
-                office.upload();
+                if (!covering() && now - closeRequestedAt >= CLOSE_FREEZE_MS) office.upload();
                 upper.invalidate();
                 if (presentation != null) presentation.screen.invalidate();
             }
-            if (presentation != null && swapped && newOffice && !currentCamera && !currentMaintenance && sceneUpdated) {
+            // The office layer itself carries the original flip, so the cover keeps the frame taken when
+            // the panel was requested instead of following live frames during the transition.
+            if (presentation != null && swapped && newOffice && !currentCamera && !currentMaintenance && sceneUpdated
+                    && !panelTransition()) {
                 scene.upload();
                 presentation.screen.invalidate();
             }
             boolean pairFresh = acceptedPanel == currentPanel && lastPairAt != 0 && now - lastPairAt <= MAX_FRAME_AGE_MS;
             boolean showCamera = currentCamera && pairFresh;
             boolean showMaintenance = currentMaintenance && pairFresh;
+            // The first camera frames can still be the end of the game's flip, a dark empty monitor.
+            // Hold the drop-in until the feed shows, for a moment at most (a ventilation blackout is dark too).
+            if (showCamera && !cameraVisible) {
+                if (firstCameraAt == 0) firstCameraAt = now;
+                if (now - firstCameraAt < CAMERA_REVEAL_MS && cameraFeedDark()) showCamera = false;
+            } else if (!currentCamera) {
+                firstCameraAt = 0;
+            }
+            if (gamePaused) {
+                showCamera = cameraVisible;
+                showMaintenance = maintenanceVisible;
+                panelSeenAt = now;
+            } else if (showCamera || showMaintenance) {
+                panelSeenAt = now;
+            } else if (panelVisible() && frameFresh && now - panelSeenAt < PANEL_GRACE_MS
+                    && !(officeNow && !currentCamera && !currentMaintenance)) {
+                // Only a frame that clearly shows the office closes the panel at once. In a blackout the
+                // game can ignore the close click, and an unreadable frame is not proof it closed.
+                showCamera = cameraVisible;
+                showMaintenance = maintenanceVisible;
+            }
             if (cameraVisible != showCamera || maintenanceVisible != showMaintenance) {
                 if (!showCamera) gallery.reset();
                 if (panelVisible()) cancelTap();
                 upper.releaseTouch();
                 if (presentation != null) presentation.screen.releaseTouch();
                 boolean maintenanceOpened = showMaintenance && !maintenanceVisible;
+                if (!panelVisible() && (showCamera || showMaintenance) && now - coverTakenAt < OPEN_HOLD_MS) {
+                    openCoverUntil = now + OPEN_COVER_MS;
+                    handler.postDelayed(this::refreshCover, OPEN_COVER_MS + 20);
+                }
+                if (panelVisible() && !showCamera && !showMaintenance) {
+                    coverUntil = now + CLOSE_COVER_MS;
+                    handler.postDelayed(this::updateControls, CLOSE_COVER_MS + 20);
+                }
                 cameraVisible = showCamera;
                 maintenanceVisible = showMaintenance;
                 if (showMaintenance && !arcade) progress.recordMaintenance();
@@ -322,7 +417,46 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
             else if (!frameFresh) titleOnScreen = false;
             updateTitle(now);
         }
-        handler.postDelayed(this::poll, 24);
+        // Checked often enough to show every frame the game presents at 60 fps.
+        handler.postDelayed(this::poll, 8);
+    }
+
+    /** Ends the opening cover: shows the live office again, or the picture if no panel opened. */
+    private void refreshCover() {
+        if (covering()) return;
+        if (panelVisible() && office.metadata[0] != 0) office.upload();
+        upper.invalidate();
+        if (presentation != null) presentation.screen.invalidate();
+        updateControls();
+    }
+
+    // Frame pipeline numbers for tuning: game presents, frames reaching the app, capture cost.
+    private long statsAt;
+    private int statsScenes, statsOffices, statsPresentAt;
+    private long statsCaptureUs;
+
+    private void frameStats(long now, boolean sceneUpdated, boolean officeUpdated) {
+        if (sceneUpdated) {
+            ++statsScenes;
+            statsCaptureUs += scene.metadata[3];
+        }
+        if (officeUpdated) ++statsOffices;
+        if (statsAt == 0) {
+            statsAt = now;
+            statsPresentAt = scene.metadata[1];
+            return;
+        }
+        long span = now - statsAt;
+        if (span < 2000) return;
+        int presents = scene.metadata[1] - statsPresentAt;
+        android.util.Log.d("ThorFrames", String.format(java.util.Locale.ROOT,
+                "game %.1f fps, scene %.1f fps, office %.1f fps, capture %d us",
+                presents * 1000f / span, statsScenes * 1000f / span, statsOffices * 1000f / span,
+                statsScenes > 0 ? statsCaptureUs / statsScenes : 0));
+        statsAt = now;
+        statsPresentAt = scene.metadata[1];
+        statsScenes = statsOffices = 0;
+        statsCaptureUs = 0;
     }
 
     private void refreshProgress() {
@@ -336,14 +470,62 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
         return cameraVisible || maintenanceVisible;
     }
 
+    /** True while a panel is opening or has just closed and the transition is still running. */
+    private boolean panelTransition() {
+        long now = SystemClock.uptimeMillis();
+        return now < coverUntil || now < openCoverUntil;
+    }
+
+    private boolean covering() {
+        return cover != null && SystemClock.uptimeMillis() < openCoverUntil;
+    }
+
+    /** Slides the monitor in from the edge next to the office screen, or back out over it. */
+    private void slide(View view, boolean show, boolean fromTop) {
+        Object state = view.getTag();
+        if (show) {
+            if (view.getVisibility() == View.VISIBLE && !"out".equals(state)) return;
+            view.animate().cancel();
+            float h = view.getHeight() > 0 ? view.getHeight() : view.getResources().getDisplayMetrics().heightPixels;
+            if (view.getVisibility() != View.VISIBLE) view.setTranslationY(fromTop ? -h : h);
+            view.setVisibility(View.VISIBLE);
+            view.setTag("in");
+            view.animate().translationY(0).setDuration(SLIDE_IN_MS)
+                    .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).withEndAction(null).start();
+        } else {
+            if (view.getVisibility() != View.VISIBLE || "out".equals(state)) return;
+            view.animate().cancel();
+            float h = view.getHeight();
+            view.setTag("out");
+            view.animate().translationY(fromTop ? -h : h).setDuration(SLIDE_OUT_MS)
+                    .setInterpolator(new android.view.animation.AccelerateInterpolator(1.4f))
+                    .withEndAction(() -> {
+                        if (!"out".equals(view.getTag())) return;
+                        view.setVisibility(View.GONE);
+                        view.setTranslationY(0);
+                        view.setTag(null);
+                    }).start();
+        }
+    }
+
     private void updateControls() {
         refreshMonitorHints();
         boolean menu = titleShown();
         titleView.setVisibility(menu ? View.VISIBLE : View.GONE);
         upperManager.setVisibility(menu && managerFocus && presentation == null ? View.VISIBLE : View.GONE);
-        upper.setVisibility(presentation != null && panelVisible() ? View.VISIBLE : View.GONE);
+        if (presentation == null) {
+            upper.animate().cancel();
+            upper.setVisibility(View.GONE);
+        } else if (swapped) {
+            // Cameras on top: the monitor rises from the bottom edge of the upper screen.
+            slide(upper, panelVisible(), false);
+        } else {
+            upper.setVisibility(panelVisible() || panelTransition() ? View.VISIBLE : View.GONE);
+            upper.invalidate();
+        }
         if (upperDesk != null) {
-            upperDesk.setVisibility(presentation != null && inOffice && !panelVisible() ? View.VISIBLE : View.GONE);
+            upperDesk.setVisibility(presentation != null && inOffice && (!panelVisible() || "out".equals(upper.getTag()))
+                    ? View.VISIBLE : View.GONE);
             upperDesk.update();
         }
         if (presentation != null) presentation.updateControls();
@@ -383,7 +565,20 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
         return cameraVisible && stepCamera(direction);
     }
 
+    /**
+     * True a few seconds after the office was last seen. During a ventilation blackout or a short
+     * stall the X and L2 requests wait for the game instead of being dropped.
+     */
+    private boolean officeRecently() {
+        return active && officeSeenAt != 0 && SystemClock.uptimeMillis() - officeSeenAt < PANEL_HOLD_MS
+                && !titleShown();
+    }
+
     boolean control(ThorController.Action action) {
+        if ((action == ThorController.Action.MONITOR || action == ThorController.Action.MAINTENANCE)
+                && !isNightActive() && officeRecently()) {
+            return requestPanel(action == ThorController.Action.MONITOR ? Opening.MONITOR : Opening.MAINTENANCE);
+        }
         if (!isNightActive()) return false;
         switch (action) {
             case MONITOR:
@@ -455,20 +650,29 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
     }
 
     private boolean requestPanel(Opening panel) {
-        if (!active || !activity.hasWindowFocus() || !inOffice || opening != Opening.NONE) return false;
+        if (!active || !activity.hasWindowFocus() || !inOffice && !officeRecently() || opening != Opening.NONE) {
+            return false;
+        }
         if (panelVisible()) {
             if (panel == Opening.MONITOR && cameraVisible) {
+                closeRequestedAt = SystemClock.uptimeMillis();
                 routeTap(471, 63);
+                handler.postDelayed(this::parkPointer, PARK_DELAY_MS);
                 return true;
             }
             if (panel == Opening.MAINTENANCE && maintenanceVisible) {
+                closeRequestedAt = SystemClock.uptimeMillis();
                 routeTap(125, 322);
+                handler.postDelayed(this::parkPointer, PARK_DELAY_MS);
                 return true;
             }
             return false;
         }
         opening = panel;
         openDeadline = SystemClock.uptimeMillis() + PANEL_OPEN_TIMEOUT_MS;
+        openPointerAt = SystemClock.uptimeMillis();
+        // The game's camera bar sits at the right end of the office and the maintenance bar at the
+        // left end, so the office scrolls there first, as it does with a mouse.
         moveGuestPointer(panel == Opening.MONITOR ? 506 : 5, 190);
         updateControls();
         return true;
@@ -480,8 +684,42 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
         boolean press = fresh && (flags & (monitor ? MONITOR_SWITCH : MAINTENANCE_SWITCH)) != 0;
         if (!press && now < openDeadline && !panelVisible()) return;
         opening = Opening.NONE;
+        if (press) android.util.Log.d("ThorFrames", (monitor ? "monitor" : "maintenance") + " bar after "
+                + (now - openPointerAt) + " ms");
+        if (press && !panelVisible()) takeCover();
         if (press && !panelVisible()) clickGuest(monitor ? 471 : 207, monitor ? 63 : 361, false);
         updateControls();
+    }
+
+    /**
+     * After a close click the pointer would rest on the game's monitor or maintenance bar, which
+     * reacts to the pointer passing over it and can bring the panel straight back. Park it mid-office.
+     */
+    private void parkPointer() {
+        if (!active || panelVisible() && closeRequestedAt == 0) return;
+        if (pendingPress != null || buttonDown) {
+            handler.postDelayed(this::parkPointer, 40);
+            return;
+        }
+        moveGuestPointer(256, 190);
+    }
+
+    private long openPointerAt;
+
+    /**
+     * Freezes the upper screen on the office as it is when the game's bar is clicked, so the original
+     * flip never plays there. The view already matches the live office shown once the panel is up.
+     */
+    private void takeCover() {
+        if (scene.metadata[0] == 0) return;
+        scene.upload();
+        if (cover == null || cover.getWidth() != scene.bitmap.getWidth() || cover.getHeight() != scene.bitmap.getHeight()) {
+            cover = Bitmap.createBitmap(scene.bitmap.getWidth(), scene.bitmap.getHeight(), Bitmap.Config.ARGB_8888);
+        }
+        new Canvas(cover).drawBitmap(scene.bitmap, 0, 0, null);
+        coverTakenAt = SystemClock.uptimeMillis();
+        openCoverUntil = coverTakenAt + OPEN_HOLD_MS;
+        handler.postDelayed(this::refreshCover, OPEN_HOLD_MS + 20);
     }
 
     private void moveGuestPointer(float x, float y) {
@@ -873,7 +1111,9 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
                     }
                     break;
                 case PLAYING:
-                    if (inOffice) change(Phase.DONE);
+                    // A real office frame without the minigame title ends it; the office grace period
+                    // would otherwise end it the moment it starts.
+                    if (fresh && officeFrame && !arcadeTitle()) change(Phase.DONE);
                     break;
                 case FAILED:
                     if (fresh && arcadeTitle()) change(Phase.PLAYING);
@@ -942,11 +1182,12 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
 
             FrameLayout content = new FrameLayout(getContext());
             screen = new ScreenView(getContext(), !swapped);
-            content.addView(screen, new FrameLayout.LayoutParams(-1, -1));
+
             desk = new DeskPanel(getContext(), "Panels unlock once the office is on screen");
             content.addView(desk, new FrameLayout.LayoutParams(-1, -1));
             manager = new ThorManagerView(getContext(), managerHost, arcadeStage, launchLayout);
             content.addView(manager, new FrameLayout.LayoutParams(-1, -1));
+            content.addView(screen, new FrameLayout.LayoutParams(-1, -1));
             if (swapped && !arcade) {
                 deskItem = new DeskDecoration(getContext());
                 float density = getContext().getResources().getDisplayMetrics().density;
@@ -963,9 +1204,15 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
             if (screen == null) return;
             boolean showScreen = swapped && inOffice || panelVisible();
             boolean menu = titleShown();
-            screen.setVisibility(showScreen ? View.VISIBLE : View.GONE);
-            manager.setVisibility(menu && !showScreen ? View.VISIBLE : View.GONE);
-            desk.setVisibility(showScreen || menu ? View.GONE : View.VISIBLE);
+            if (swapped) {
+                screen.setVisibility(showScreen ? View.VISIBLE : View.GONE);
+            } else {
+                // Office on top: the monitor drops in from the top edge and goes back up when closed.
+                slide(screen, panelVisible(), true);
+            }
+            boolean settled = showScreen && screen.getVisibility() == View.VISIBLE && !"out".equals(screen.getTag());
+            manager.setVisibility(menu && !settled ? View.VISIBLE : View.GONE);
+            desk.setVisibility(menu || swapped && showScreen ? View.GONE : View.VISIBLE);
             desk.update();
             if (deskItem != null) {
                 deskItem.setVisibility(inOffice && progress.displayItem() != ThorProgress.Decoration.NONE
@@ -1109,7 +1356,8 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
             text(c, arcade ? "Arcade practice" : "Security desk", 32, 52, 22, SECONDARY);
             text(c, night > 0 ? "Night " + night : "Night", 32, 92, 40, PRIMARY);
             String state = opening == Opening.MONITOR ? "Opening cameras" : opening == Opening.MAINTENANCE
-                    ? "Opening maintenance" : keysVisible ? arcadeStage.title : inOffice ? "Monitor down" : "Standing by";
+                    ? "Opening maintenance" : keysVisible ? arcadeStage.title : inOffice ? "Monitor down"
+                    : gamePaused ? "Paused" : gameBusy ? "Game busy" : "Standing by";
             ThorStyle.textRight(c, paint, state, w - 32, 92, 24, opening != Opening.NONE ? PRIMARY : SECONDARY);
             paint.setColor(inOffice ? ACCENT : 0xff3a3a3a);
             c.drawCircle(w - 52 - ThorStyle.width(paint, state, 24), 84, 6, paint);
@@ -1224,7 +1472,9 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
                     : (night > 0 ? "Saved night " + night + "    " : "") + String.format(java.util.Locale.US, "%,d pts", progress.wallet())
                     + "    " + progress.earnedCount() + " of " + progress.badgeCount() + " achievements";
             text(c, record, 32, 944, 22, SECONDARY);
-            text(c, inOffice ? "Tap a panel or press its button" : waiting, 32, 988, 20, MUTED);
+            text(c, gamePaused ? "Paused. Choose Keep playing to return" : keysVisible ? "Hold an arrow or the D-pad to move"
+                    : inOffice ? "Tap a panel or press its button" : gameBusy
+                    ? "The game is catching up. Panels unlock when it responds" : waiting, 32, 988, 20, MUTED);
             c.restoreToCount(save);
         }
 
@@ -1310,7 +1560,13 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
             if (!monitor) {
                 if (fitOffice) setFittedArea(FULL_SCENE);
                 else area.set(0, 0, getWidth(), getHeight());
-                if (!panelVisible()) {
+                if (covering()) {
+                    canvas.drawBitmap(cover, FULL_SCENE, area, paint);
+                    return;
+                }
+                boolean closing = SystemClock.uptimeMillis() < coverUntil && office.metadata[0] != 0;
+                // While a panel closes, the office keeps its last clear frame in either screen order.
+                if (!panelVisible() && !closing) {
                     canvas.drawBitmap(scene.bitmap, FULL_SCENE, area, paint);
                     return;
                 }
@@ -1319,8 +1575,9 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
                 header.set(area.left, area.top, area.right,
                         area.top + area.height() * SCENE_HEADER.height() / scene.height);
                 canvas.drawBitmap(scene.bitmap, SCENE_HEADER, header, paint);
-            } else if (panelVisible()) {
-                Rect crop = cameraVisible ? CAMERA_CROP : MAINTENANCE_CROP;
+            } else if (panelVisible() || shownCrop != null) {
+                Rect crop = panelVisible() ? (cameraVisible ? CAMERA_CROP : MAINTENANCE_CROP) : shownCrop;
+                shownCrop = crop;
                 setFittedArea(crop);
                 canvas.drawBitmap(scene.bitmap, crop, area, paint);
                 drawHints(canvas);
@@ -1328,6 +1585,7 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
         }
 
         private final android.graphics.Paint hintPaint = ThorStyle.textPaint();
+        private Rect shownCrop;
 
         private void drawHints(Canvas canvas) {
             String[][] hints = monitorHints;
@@ -1404,14 +1662,14 @@ final class ThorDualScreen implements DisplayManager.DisplayListener {
             boolean allowOfficeTouch = !monitor && swapped && inOffice && !panelVisible();
             if (!activity.hasWindowFocus() || !(monitor && panelVisible()) && !allowOfficeTouch) {
                 touchId = -1;
-                return false;
+                return monitor && getVisibility() == View.VISIBLE;
             }
             Rect source = monitor ? cameraVisible ? CAMERA_CROP : MAINTENANCE_CROP : FULL_SCENE;
             int index = event.getActionIndex();
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     touchId = area.contains(event.getX(), event.getY()) ? event.getPointerId(0) : -1;
-                    return touchId >= 0;
+                    return touchId >= 0 || monitor;
                 case MotionEvent.ACTION_CANCEL:
                     touchId = -1;
                     return true;

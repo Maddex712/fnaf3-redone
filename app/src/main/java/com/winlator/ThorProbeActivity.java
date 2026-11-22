@@ -56,6 +56,7 @@ public final class ThorProbeActivity extends AppCompatActivity {
     private String message;
     private int messageColor = ThorStyle.MUTED;
     private ThorUpdates updates;
+    private ThorBootPanel.Screen lower;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -81,6 +82,8 @@ public final class ThorProbeActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
+        // The game brings its own lower screen.
+        hideLower();
         // Only a launch that actually covered this screen counts; the first resume after a launch
         // from onCreate is not a return from the game.
         if (launched) behindGame = true;
@@ -89,6 +92,8 @@ public final class ThorProbeActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        showLower();
+        refresh();
         if (!behindGame) return;
         behindGame = false;
         launched = false;
@@ -219,6 +224,7 @@ public final class ThorProbeActivity extends AppCompatActivity {
     protected void onDestroy() {
         if (activeImport != null) activeImport.cancel();
         updates.cancel();
+        hideLower();
         super.onDestroy();
     }
 
@@ -249,6 +255,8 @@ public final class ThorProbeActivity extends AppCompatActivity {
                     + "of FNaF 3. This happens once after installing."}, ThorStyle.MUTED);
             title.setProgress(Math.max(0, runtimePercent));
             title.setStatus("Preparing FNaF 3…", ThorStyle.MUTED);
+            lower("First launch", new String[]{"Unpacking the Windows runtime that runs your copy of FNaF 3. "
+                    + "This happens once after installing."}, ThorStyle.MUTED, Math.max(0, runtimePercent), false);
             return;
         }
         if (!setupMode && !importing) {
@@ -257,6 +265,10 @@ public final class ThorProbeActivity extends AppCompatActivity {
             title.setProgress(-1);
             title.setStatus(message != null && messageColor == ThorStyle.RED ? message : "Loading the original game\u2026",
                     message != null && messageColor == ThorStyle.RED ? ThorStyle.RED : ThorStyle.MUTED);
+            boolean failed = message != null && messageColor == ThorStyle.RED;
+            lower(failed ? "Could not start" : "Loading the original game",
+                    new String[]{failed ? message : "Your Steam copy of FNaF 3 is starting in the private runtime."},
+                    failed ? ThorStyle.RED : ThorStyle.MUTED, -1, false);
             return;
         }
         if (importing) {
@@ -287,8 +299,54 @@ public final class ThorProbeActivity extends AppCompatActivity {
             title.setProgress(preparing ? 0 : -1);
         }
         title.setEntries(entries, keep);
+        if (importing) {
+            lower("Verifying the Steam executable", new String[]{"Copying FiveNightsatFreddys3.exe and checking "
+                    + "its size and SHA-256."}, ThorStyle.MUTED, Math.max(0, importPercent), true);
+        } else {
+            String[] shown = title.info();
+            String[] rest = new String[Math.max(0, shown.length - 1)];
+            System.arraycopy(shown, 1, rest, 0, rest.length);
+            lower(shown.length > 0 ? shown[0] : "Setup", rest, message != null ? messageColor : ThorStyle.MUTED,
+                    preparing ? 0 : -1, true);
+        }
         title.setStatus("STEAM BUILD 1892839  /  " + (importing ? "VERIFYING" : imported ? "VERIFIED" : "NOT IMPORTED")
                 + "     " + versionName() + "     D-PAD  MOVE     A  SELECT", ThorStyle.MUTED);
+    }
+
+    private void lower(String heading, String[] lines, int color, int progress, boolean menu) {
+        if (lower != null) lower.panel.set(heading, lines, color, progress, menu);
+    }
+
+    /** Covers the Thor's lower screen while this screen is up, unless single-screen mode is chosen. */
+    private void showLower() {
+        if (PreferenceManager.getDefaultSharedPreferences(this).getInt("thor_display_mode", 0) == 2) {
+            hideLower();
+            return;
+        }
+        android.view.Display display = ThorBootPanel.lowerDisplay(this);
+        if (display == null) {
+            hideLower();
+            return;
+        }
+        if (lower != null && lower.isShowing() && lower.getDisplay().getDisplayId() == display.getDisplayId()) return;
+        hideLower();
+        try {
+            lower = new ThorBootPanel.Screen(this, display);
+            lower.show();
+        } catch (android.view.WindowManager.InvalidDisplayException error) {
+            Log.w(TAG, "Lower screen is not available", error);
+            lower = null;
+        }
+    }
+
+    private void hideLower() {
+        if (lower == null) return;
+        try {
+            lower.dismiss();
+        } catch (RuntimeException ignored) {
+            // The display went away first.
+        }
+        lower = null;
     }
 
     private String versionName() {
@@ -476,6 +534,15 @@ public final class ThorProbeActivity extends AppCompatActivity {
         Files.deleteIfExists(new File(sourceDir, "thor-scene.frames").toPath());
         try (InputStream source = getAssets().open("thor-dual/d3d9.dll")) {
             installBridgeFile(source, "d3d9.dll");
+        }
+        // The bridge draws through DXVK (Direct3D 9 to Vulkan) when this file is present.
+        File dxvk = new File(sourceDir, "thor-dxvk-d3d9.dll");
+        if (PreferenceManager.getDefaultSharedPreferences(this).getBoolean("thor_dxvk", true)) {
+            try (InputStream source = getAssets().open("thor-dual/dxvk-d3d9.dll")) {
+                installBridgeFile(source, "thor-dxvk-d3d9.dll");
+            }
+        } else {
+            Files.deleteIfExists(dxvk.toPath());
         }
     }
 

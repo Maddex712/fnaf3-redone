@@ -57,7 +57,7 @@ final class ThorManagerView extends View {
     private static final int ACCENT = 0xff8fe05a;
     private static final int ERROR = 0xffd9644f;
 
-    private static final String[] TAB_LABELS = {"SHIFTS", "RECORDS", "ASSIGNMENTS", "DESK"};
+    private static final String[] TAB_LABELS = {"SHIFTS", "RECORDS", "ARCADE", "DESK"};
     private static final ThorProgress.Decoration[] ITEMS = {
             ThorProgress.Decoration.MOTH, ThorProgress.Decoration.LANTERN, ThorProgress.Decoration.RABBIT};
 
@@ -103,12 +103,12 @@ final class ThorManagerView extends View {
         ThorAssets.prepare(context, this::invalidate);
     }
 
-    /** Current layout settings: display mode, swapped, 4:3, smooth, perspective. */
+    /** Settings that apply on the next launch: display mode, swapped, 4:3, smooth, perspective, renderer. */
     static int[] layoutSettings(Context context) {
         SharedPreferences s = PreferenceManager.getDefaultSharedPreferences(context);
         return new int[]{s.getInt("thor_display_mode", 0), s.getBoolean("thor_swap_screens", false) ? 1 : 0,
                 s.getBoolean("thor_fit_office", false) ? 1 : 0, s.getBoolean("thor_smooth_picture", true) ? 1 : 0,
-                s.getBoolean("thor_office_perspective", false) ? 1 : 0};
+                s.getBoolean("thor_office_perspective", false) ? 1 : 0, s.getBoolean("thor_dxvk", true) ? 1 : 0};
     }
 
     /** The newest capture the player's own Camera Archive holds, decoded small. */
@@ -394,7 +394,7 @@ final class ThorManagerView extends View {
         ThorProgress.Decoration item = progress.displayItem();
         row(c, w, 868, "shop", "Desk shop", item == ThorProgress.Decoration.NONE ? "Nothing on the desk" : item.label + " on the desk",
                 String.format(Locale.US, "%,d pts", progress.wallet()), () -> show(Tab.DESK));
-        row(c, w, 956, "options", "Options", "Screens, picture and controller", "", () -> show(Tab.OPTIONS));
+        row(c, w, 956, "options", "Settings", "Screens, picture and controller", "", () -> show(Tab.OPTIONS));
     }
 
     private void row(Canvas c, float w, float top, String key, String label, String value, String meta, Runnable action) {
@@ -538,11 +538,12 @@ final class ThorManagerView extends View {
                 {"4:3 office view", current[2] == 1 ? "On" : "Off"},
                 {"Smooth scaling", current[3] == 1 ? "On" : "Off"},
                 {"Office perspective", current[4] == 1 ? "On" : "Off"},
+                {"Renderer", current[5] == 1 ? "DXVK, 60 fps" : "WineD3D, 30 fps"},
                 {"Look sensitivity", s.getInt("thor_controller_sensitivity", 100) + "%"},
                 {"Controller mappings", ""},
                 {"Updates and Steam import", ""},
                 {"Open-source licenses", ""}};
-        t(c, "Options", 32, 212, 32, PRIMARY);
+        t(c, "Settings", 32, 212, 32, PRIMARY);
         tr(c, "Saved on this device", w - 32, 212, 22, SECONDARY);
         for (int i = 0; i < rows.length; ++i) {
             float top = 240 + i * 64;
@@ -555,12 +556,12 @@ final class ThorManagerView extends View {
         }
         boolean pending = !java.util.Arrays.equals(current, launchLayout);
         if (pending) {
-            t(c, "Screen and picture changes apply after a restart", 32, 860, 22, SECONDARY);
+            t(c, "Screen, picture and renderer changes apply after a restart", 32, 920, 22, SECONDARY);
             float bw = ThorStyle.width(paint, "Restart now", 26) + 112;
-            fill(c, 32, 884, 32 + bw, 940, PRIMARY);
-            keycapDark(c, 48, 896, "A");
-            t(c, "Restart now", 96, 922, 26, 0xff111111);
-            targets.add(new Target("restart", 32, 884, 32 + bw, 940, host::restartToApply));
+            fill(c, 32, 944, 32 + bw, 1000, PRIMARY);
+            keycapDark(c, 48, 956, "A");
+            t(c, "Restart now", 96, 982, 26, 0xff111111);
+            targets.add(new Target("restart", 32, 944, 32 + bw, 1000, host::restartToApply));
         }
     }
 
@@ -573,14 +574,15 @@ final class ThorManagerView extends View {
             case 2: e.putBoolean("thor_fit_office", !s.getBoolean("thor_fit_office", false)); break;
             case 3: e.putBoolean("thor_smooth_picture", !s.getBoolean("thor_smooth_picture", true)); break;
             case 4: e.putBoolean("thor_office_perspective", !s.getBoolean("thor_office_perspective", false)); break;
-            case 5: {
+            case 5: e.putBoolean("thor_dxvk", !s.getBoolean("thor_dxvk", true)); break;
+            case 6: {
                 int value = s.getInt("thor_controller_sensitivity", 100) + 25;
                 s.edit().putInt("thor_controller_sensitivity", value > 175 ? 25 : value).apply();
                 invalidate();
                 return;
             }
-            case 6: host.openControllerMappings(); return;
-            case 7: host.openSetup(); return;
+            case 7: host.openControllerMappings(); return;
+            case 8: host.openSetup(); return;
             default: host.openLicenses(); return;
         }
         e.apply();

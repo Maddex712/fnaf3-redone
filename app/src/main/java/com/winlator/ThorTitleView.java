@@ -119,6 +119,10 @@ final class ThorTitleView extends View {
         invalidate();
     }
 
+    String[] info() {
+        return info != null ? info : new String[0];
+    }
+
     void setProgress(int value) {
         progress = value;
         invalidate();
