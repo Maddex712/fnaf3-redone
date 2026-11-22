@@ -2,7 +2,7 @@
 
 An unofficial Android launcher and dual-screen companion for the Steam release of Five Nights at Freddy's 3. It runs **your own copy** of the game, unmodified, through a bundled Wine and Box64 runtime based on [Winlator](https://github.com/brunodev85/winlator-app). The APK contains no game files.
 
-![Setup screen](docs/images/setup.png)
+![Redone title menu with New Game, Night 2, Arcade, Achievements, Desk Shop, Settings and Exit](docs/images/title.png)
 
 ## What you need
 
@@ -15,6 +15,8 @@ An unofficial Android launcher and dual-screen companion for the Steam release o
 2. Copy `FiveNightsatFreddys3.exe` from your Steam install to the device.
 3. Open the app, choose **Import Steam file**, and select the executable. It is verified and copied into the app.
 4. Choose **Play**. The first launch unpacks the runtime once, behind the title.
+
+![First-launch setup screen asking for the Steam executable](docs/images/setup.png)
 
 Updating from 1.0 keeps your saves, points and unlocks.
 
